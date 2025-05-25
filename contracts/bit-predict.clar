@@ -144,3 +144,82 @@
     (ok true)
   )
 )
+
+;; Market Resolution - Oracle Price Settlement
+;; Settles market with final price from trusted oracle source
+;; Enables payout calculations for winning predictions
+(define-public (resolve-market
+    (market-id uint)
+    (end-price uint)
+  )
+  (let ((market (unwrap! (map-get? markets market-id) ERR_NOT_FOUND)))
+    ;; Oracle Authorization & Timing Checks
+    (asserts! (is-eq tx-sender (var-get oracle-address)) ERR_OWNER_ONLY)
+    (asserts! (>= stacks-block-height (get end-block market)) ERR_MARKET_CLOSED)
+    (asserts! (not (get resolved market)) ERR_MARKET_CLOSED)
+    (asserts! (> end-price u0) ERR_INVALID_PARAMETER)
+    ;; Finalize Market State
+    (map-set markets market-id
+      (merge market {
+        end-price: end-price,
+        resolved: true,
+      })
+    )
+    (ok true)
+  )
+)
+
+;; Payout Distribution - Claim Winning Predictions
+;; Calculates proportional rewards for correct predictions
+;; Deducts platform fee and transfers net winnings
+(define-public (claim-winnings (market-id uint))
+  (let (
+      (market (unwrap! (map-get? markets market-id) ERR_NOT_FOUND))
+      (prediction (unwrap!
+        (map-get? user-predictions {
+          market-id: market-id,
+          user: tx-sender,
+        })
+        ERR_NOT_FOUND
+      ))
+    )
+    ;; Settlement & Claim Status Validation
+    (asserts! (get resolved market) ERR_MARKET_CLOSED)
+    (asserts! (not (get claimed prediction)) ERR_ALREADY_CLAIMED)
+    (let (
+        ;; Determine Winning Side
+        (winning-prediction (if (> (get end-price market) (get start-price market))
+          "up"
+          "down"
+        ))
+        (total-stake (+ (get total-up-stake market) (get total-down-stake market)))
+        (winning-stake (if (is-eq winning-prediction "up")
+          (get total-up-stake market)
+          (get total-down-stake market)
+        ))
+      )
+      ;; Verify User Predicted Correctly
+      (asserts! (is-eq (get prediction prediction) winning-prediction)
+        ERR_INVALID_PREDICTION
+      )
+      (let (
+          ;; Proportional Payout Calculation
+          (winnings (/ (* (get stake prediction) total-stake) winning-stake))
+          (fee (/ (* winnings (var-get fee-percentage)) u100))
+          (payout (- winnings fee))
+        )
+        ;; Execute Transfers
+        (try! (as-contract (stx-transfer? payout (as-contract tx-sender) tx-sender)))
+        (try! (as-contract (stx-transfer? fee (as-contract tx-sender) CONTRACT_OWNER)))
+        ;; Mark Claim as Processed
+        (map-set user-predictions {
+          market-id: market-id,
+          user: tx-sender,
+        }
+          (merge prediction { claimed: true })
+        )
+        (ok payout)
+      )
+    )
+  )
+)
