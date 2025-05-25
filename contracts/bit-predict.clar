@@ -223,3 +223,71 @@
     )
   )
 )
+
+;; READ-ONLY FUNCTIONS - DATA QUERIES
+
+;; Query Market Information - Public Market Data Access
+(define-read-only (get-market (market-id uint))
+  (map-get? markets market-id)
+)
+
+;; Query User Position - Individual Prediction Details
+(define-read-only (get-user-prediction
+    (market-id uint)
+    (user principal)
+  )
+  (map-get? user-predictions {
+    market-id: market-id,
+    user: user,
+  })
+)
+
+;; Contract Treasury Balance - Total Locked STX Funds
+(define-read-only (get-contract-balance)
+  (stx-get-balance (as-contract tx-sender))
+)
+
+;; ADMINISTRATIVE FUNCTIONS - GOVERNANCE & MAINTENANCE
+
+;; Oracle Management - Update Trusted Price Source
+;; Enables migration to new oracle infrastructure
+(define-public (set-oracle-address (new-address principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (asserts! (is-eq new-address new-address) ERR_INVALID_PARAMETER)
+    (ok (var-set oracle-address new-address))
+  )
+)
+
+;; Economic Parameter Adjustment - Minimum Stake Configuration
+;; Allows adjustment of participation barrier for market health
+(define-public (set-minimum-stake (new-minimum uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (asserts! (> new-minimum u0) ERR_INVALID_PARAMETER)
+    (ok (var-set minimum-stake new-minimum))
+  )
+)
+
+;; Fee Structure Management - Platform Sustainability Rate
+;; Maintains protocol sustainability through configurable fees
+(define-public (set-fee-percentage (new-fee uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (asserts! (<= new-fee u100) ERR_INVALID_PARAMETER)
+    (ok (var-set fee-percentage new-fee))
+  )
+)
+
+;; Treasury Management - Fee Collection & Protocol Funding
+;; Enables withdrawal of accumulated platform fees for development
+(define-public (withdraw-fees (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (asserts! (<= amount (stx-get-balance (as-contract tx-sender)))
+      ERR_INSUFFICIENT_BALANCE
+    )
+    (try! (as-contract (stx-transfer? amount (as-contract tx-sender) CONTRACT_OWNER)))
+    (ok amount)
+  )
+)
