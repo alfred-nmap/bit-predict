@@ -59,3 +59,88 @@
     claimed: bool, ;; Payout claim status
   }
 )
+
+;; CORE MARKET FUNCTIONS
+
+;; Market Creation - Initialize New Prediction Market
+;; Creates a time-bounded prediction market with specified parameters
+;; Only callable by contract owner to ensure market integrity
+(define-public (create-market
+    (start-price uint)
+    (start-block uint)
+    (end-block uint)
+  )
+  (let ((market-id (var-get market-counter)))
+    ;; Access Control & Parameter Validation
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (asserts! (> end-block start-block) ERR_INVALID_PARAMETER)
+    (asserts! (> start-price u0) ERR_INVALID_PARAMETER)
+    ;; Initialize Market State
+    (map-set markets market-id {
+      start-price: start-price,
+      end-price: u0,
+      total-up-stake: u0,
+      total-down-stake: u0,
+      start-block: start-block,
+      end-block: end-block,
+      resolved: false,
+    })
+    ;; Increment Global Counter
+    (var-set market-counter (+ market-id u1))
+    (ok market-id)
+  )
+)
+
+;; Prediction Placement - Stake STX on Price Direction
+;; Allows users to stake STX tokens on predicted price movement
+;; Enforces timing constraints and minimum stake requirements
+(define-public (make-prediction
+    (market-id uint)
+    (prediction (string-ascii 4))
+    (stake uint)
+  )
+  (let (
+      (market (unwrap! (map-get? markets market-id) ERR_NOT_FOUND))
+      (current-block stacks-block-height)
+    )
+    ;; Market Timing Validation
+    (asserts!
+      (and
+        (>= current-block (get start-block market))
+        (< current-block (get end-block market))
+      )
+      ERR_MARKET_CLOSED
+    )
+    ;; Prediction & Stake Validation
+    (asserts! (or (is-eq prediction "up") (is-eq prediction "down"))
+      ERR_INVALID_PREDICTION
+    )
+    (asserts! (>= stake (var-get minimum-stake)) ERR_INVALID_PREDICTION)
+    (asserts! (<= stake (stx-get-balance tx-sender)) ERR_INSUFFICIENT_BALANCE)
+    ;; Transfer Stake to Contract Custody
+    (try! (stx-transfer? stake tx-sender (as-contract tx-sender)))
+    ;; Record User Position
+    (map-set user-predictions {
+      market-id: market-id,
+      user: tx-sender,
+    } {
+      prediction: prediction,
+      stake: stake,
+      claimed: false,
+    })
+    ;; Update Market Totals
+    (map-set markets market-id
+      (merge market {
+        total-up-stake: (if (is-eq prediction "up")
+          (+ (get total-up-stake market) stake)
+          (get total-up-stake market)
+        ),
+        total-down-stake: (if (is-eq prediction "down")
+          (+ (get total-down-stake market) stake)
+          (get total-down-stake market)
+        ),
+      })
+    )
+    (ok true)
+  )
+)
